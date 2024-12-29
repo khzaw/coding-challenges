@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"time"
 
 	"github.com/khzaw/coding-challenges/load-balancer/internal/be"
@@ -16,7 +17,12 @@ func run(ctx context.Context, w io.Writer, args []string) error {
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt)
 	defer cancel()
 
-	be := be.New(8080)
+	port, err := strconv.Atoi(args[1])
+	if err != nil || port < 0 || port > 65535 {
+		fmt.Println("Invalid port. Using 8080")
+		port = 8080
+	}
+	be := be.New(port)
 
 	errChan := make(chan error, 1)
 	go func() {

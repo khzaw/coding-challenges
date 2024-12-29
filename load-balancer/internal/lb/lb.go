@@ -5,24 +5,40 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 )
 
 type (
 	LB struct {
-		port     int
-		listener net.Listener
-		wg       sync.WaitGroup
-		shutdown chan struct{}
+		port       int
+		servers    []string
+		currentIdx int
+		listener   net.Listener
+		wg         sync.WaitGroup
+		shutdown   chan struct{}
 	}
 )
 
-func New(port int) *LB {
-	return &LB{
-		port:     port,
-		shutdown: make(chan struct{}),
+func New(port int, serverArgs []string) *LB {
+	lb := &LB{
+		port:       port,
+		currentIdx: 0,
+		shutdown:   make(chan struct{}),
 	}
+
+	var servers []string
+	for _, a := range serverArgs {
+		port, err := strconv.Atoi(a)
+		if err != nil || port == lb.port || port < 0 || port > 65535 {
+			log.Fatalf("invalid port: %v", err)
+		}
+		servers = append(servers, "127.0.0.1:"+a)
+	}
+	lb.servers = servers
+
+	return lb
 }
 
 func (lb *LB) Start() error {
@@ -50,10 +66,10 @@ func (lb *LB) Start() error {
 			}
 
 			lb.wg.Add(1)
-			go func() {
+			go func(conn net.Conn) {
 				defer lb.wg.Done()
 				lb.HandleConnection(conn)
-			}()
+			}(conn)
 		}
 	}
 }
@@ -82,13 +98,13 @@ func (lb *LB) HandleConnection(conn net.Conn) {
 		return
 	}
 
-	backendAddr := "127.0.0.1:8080"
-	backendConn, err := net.Dial("tcp", backendAddr)
+	backendConn, err := net.Dial("tcp", lb.servers[lb.currentIdx])
 	if err != nil {
 		log.Printf("failed to connect to BE server: %v\n", err)
 		return
 	}
 	defer backendConn.Close()
+	lb.currentIdx = (lb.currentIdx + 1) % len(lb.servers)
 
 	go io.Copy(backendConn, conn)
 	io.Copy(conn, backendConn)

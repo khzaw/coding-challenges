@@ -11,7 +11,7 @@ import (
 
 func main() {
 
-	lb := lb.New(80)
+	lb := lb.New(80, os.Args[1:])
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -20,7 +20,7 @@ func main() {
 
 	// handle graceful shutdown
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	select {
 	case err := <-errChan:
