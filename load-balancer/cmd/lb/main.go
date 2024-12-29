@@ -34,4 +34,6 @@ func main() {
 		}
 	}
 
+	close(errChan)
+	close(sigChan)
 }

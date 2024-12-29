@@ -19,7 +19,7 @@ type (
 	}
 	LB struct {
 		port       int
-		mu         sync.RWMutex
+		mu         sync.Mutex
 		servers    []server
 		currentIdx int
 		listener   net.Listener
@@ -138,6 +138,7 @@ func (lb *LB) getNextHealthyServer() (*server, error) {
 }
 
 func (lb *LB) runHealthChecks(ticker *time.Ticker) {
+	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
@@ -145,6 +146,7 @@ func (lb *LB) runHealthChecks(ticker *time.Ticker) {
 				go lb.sendHealthCheck(idx)
 			}
 		case <-lb.shutdown:
+			log.Println("Health checks stopped.")
 			return
 		}
 	}
