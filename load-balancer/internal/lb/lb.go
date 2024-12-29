@@ -1,6 +1,7 @@
 package lb
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -24,7 +25,6 @@ type (
 		currentIdx int
 		listener   net.Listener
 		wg         sync.WaitGroup
-		shutdown   chan struct{}
 	}
 )
 
@@ -32,7 +32,6 @@ func New(port int, serverArgs []string) *LB {
 	lb := &LB{
 		port:       port,
 		currentIdx: -1,
-		shutdown:   make(chan struct{}),
 	}
 
 	var srvs []server
@@ -48,7 +47,7 @@ func New(port int, serverArgs []string) *LB {
 	return lb
 }
 
-func (lb *LB) Start() error {
+func (lb *LB) Start(ctx context.Context) error {
 	listener, err := net.Listen("tcp4", fmt.Sprintf(":%d", lb.port))
 	if err != nil {
 		return fmt.Errorf("failed to start server: %w", err)
@@ -57,17 +56,17 @@ func (lb *LB) Start() error {
 	lb.listener = listener
 
 	ticker := time.NewTicker(5 * time.Second)
-	go lb.runHealthChecks(ticker)
+	go lb.runHealthChecks(ctx, ticker)
 
 	for {
 		select {
-		case <-lb.shutdown:
+		case <-ctx.Done():
 			return nil
 		default:
 			conn, err := listener.Accept()
 			if err != nil {
 				select {
-				case <-lb.shutdown:
+				case <-ctx.Done():
 					return nil
 				default:
 					log.Printf("Failed to accept connection: %v", err)
@@ -85,8 +84,6 @@ func (lb *LB) Start() error {
 }
 
 func (lb *LB) Shutdown() error {
-	close(lb.shutdown)
-
 	if lb.listener != nil {
 		if err := lb.listener.Close(); err != nil {
 			return fmt.Errorf("failed to close listener: %w", err)
@@ -125,7 +122,11 @@ func (lb *LB) HandleConnection(conn net.Conn) {
 }
 
 func (lb *LB) getNextHealthyServer() (*server, error) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+
 	idx := (lb.currentIdx + 1) % len(lb.servers)
+
 	for i := 0; i < len(lb.servers); i++ {
 		idx := (idx + i) % len(lb.servers)
 		if lb.servers[idx].healthy {
@@ -137,23 +138,29 @@ func (lb *LB) getNextHealthyServer() (*server, error) {
 	return nil, errors.New("no healthy server")
 }
 
-func (lb *LB) runHealthChecks(ticker *time.Ticker) {
+func (lb *LB) runHealthChecks(ctx context.Context, ticker *time.Ticker) {
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ticker.C:
 			for idx := range lb.servers {
-				go lb.sendHealthCheck(idx)
+				go lb.sendHealthCheck(ctx, idx)
 			}
-		case <-lb.shutdown:
+		case <-ctx.Done():
 			log.Println("Health checks stopped.")
 			return
 		}
 	}
 }
 
-func (lb *LB) sendHealthCheck(idx int) error {
-	res, err := http.Get("http://" + lb.servers[idx].addr)
+func (lb *LB) sendHealthCheck(ctx context.Context, idx int) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+lb.servers[idx].addr+"/healthcheck", nil)
+	if err != nil {
+		log.Printf("failed to create a health check request")
+		return
+	}
+
+	res, err := (&http.Client{}).Do(req)
 
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
@@ -163,5 +170,5 @@ func (lb *LB) sendHealthCheck(idx int) error {
 	} else {
 		lb.servers[idx].healthy = true
 	}
-	return nil
+	return
 }

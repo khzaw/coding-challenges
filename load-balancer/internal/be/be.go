@@ -24,6 +24,10 @@ func (be *BE) Start() error {
 		fmt.Fprintf(w, "Hello from server at :%d!", be.port)
 	})
 
+	http.HandleFunc("/healthcheck", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
 	be.server = &http.Server{
 		Addr:    fmt.Sprintf(":%d", be.port),
 		Handler: nil,

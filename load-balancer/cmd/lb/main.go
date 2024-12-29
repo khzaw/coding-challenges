@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/signal"
@@ -13,9 +14,12 @@ func main() {
 
 	lb := lb.New(7070, os.Args[1:])
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	errChan := make(chan error, 1)
 	go func() {
-		errChan <- lb.Start()
+		errChan <- lb.Start(ctx)
 	}()
 
 	// handle graceful shutdown
@@ -29,6 +33,7 @@ func main() {
 		}
 	case sig := <-sigChan:
 		log.Printf("Received signal: %v", sig)
+		cancel()
 		if err := lb.Shutdown(); err != nil {
 			log.Printf("Error during shutdown: %v", err)
 		}
