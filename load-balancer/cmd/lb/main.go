@@ -11,7 +11,7 @@ import (
 
 func main() {
 
-	lb := lb.New(80, os.Args[1:])
+	lb := lb.New(7070, os.Args[1:])
 
 	errChan := make(chan error, 1)
 	go func() {
