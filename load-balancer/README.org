@@ -1,0 +1,23 @@
+* Load Balancer
+[[https://codingchallenges.fyi/challenges/challenge-load-balancer][Load Balancer Coding Challenge: ]]A simple load balancer with that distributes traffic in a static round-robin fashion.
+
+** Start multiple HTTP servers at specified ports
+#+begin_src sh
+  go run ./cmd/be/main.go 8080
+  go run ./cmd/be/main.go 8081
+  go run ./cmd/be/main.go 8082
+#+end_src
+
+** Start the load balancer with servers to load balance
+LB will start at port 7070.
+#+begin_src sh
+  go run ./cmd/lb/main.go 8080 8081 8082
+#+end_src
+
+** Send requests
+#+begin_src sh
+  curl http://localhost:7070
+  # or send parallel requests
+  printf "url = \"http://localhost:7070\"\n%.0s" {1..27} > urls.txt
+  curl --parallel --parallel-immediate --parallel-max 3 --config urls.txt
+#+end_src
