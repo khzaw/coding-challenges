@@ -82,15 +82,14 @@ func (lb *LB) HandleConnection(conn net.Conn) {
 		return
 	}
 
-	host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
-	fmt.Printf("Received request from %s", host)
-
-	var buffer []byte
-
-	n, err := conn.Read(buffer)
-	if err != nil && err != io.EOF {
+	backendAddr := "127.0.0.1:8080"
+	backendConn, err := net.Dial("tcp", backendAddr)
+	if err != nil {
+		log.Printf("failed to connect to BE server: %v\n", err)
 		return
 	}
+	defer backendConn.Close()
 
-	fmt.Printf("\n%s", string(buffer[:n]))
+	go io.Copy(backendConn, conn)
+	io.Copy(conn, backendConn)
 }

@@ -1,3 +1,3 @@
 module github.com/khzaw/coding-challenges/load-balancer
 
-go 1.23.3
+go 1.23
