@@ -8,39 +8,44 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
 type (
 	server struct {
-		addr    string
-		healthy bool
+		addr   string
+		status atomic.Bool
 	}
 	LB struct {
 		port       int
-		mu         sync.Mutex
-		servers    []server
-		currentIdx int
+		servers    []*server
+		currentIdx atomic.Int32
 		listener   net.Listener
 		wg         sync.WaitGroup
+		shutdown   chan struct{}
 	}
 )
 
 func New(port int, serverArgs []string) *LB {
 	lb := &LB{
-		port:       port,
-		currentIdx: -1,
+		port:     port,
+		shutdown: make(chan struct{}),
 	}
+	lb.currentIdx.Store(-1)
 
-	var srvs []server
+	var srvs []*server
 	for _, a := range serverArgs {
 		port, err := strconv.Atoi(a)
 		if err != nil || port == lb.port || port < 0 || port > 65535 {
 			log.Fatalf("invalid port: %v", err)
 		}
-		srvs = append(srvs, server{addr: "127.0.0.1:" + a, healthy: true})
+		srv := &server{addr: "127.0.0.1:" + a}
+		srv.status.Store(true)
+		srvs = append(srvs, srv)
 	}
 	lb.servers = srvs
 
@@ -56,7 +61,12 @@ func (lb *LB) Start(ctx context.Context) error {
 	lb.listener = listener
 
 	ticker := time.NewTicker(5 * time.Second)
-	go lb.runHealthChecks(ctx, ticker)
+
+	lb.wg.Add(1)
+	go func() {
+		defer lb.wg.Done()
+		lb.runHealthChecks(ctx, ticker)
+	}()
 
 	for {
 		select {
@@ -65,6 +75,11 @@ func (lb *LB) Start(ctx context.Context) error {
 		default:
 			conn, err := listener.Accept()
 			if err != nil {
+
+				if errors.Is(err, net.ErrClosed) {
+					return nil
+				}
+
 				select {
 				case <-ctx.Done():
 					return nil
@@ -84,6 +99,8 @@ func (lb *LB) Start(ctx context.Context) error {
 }
 
 func (lb *LB) Shutdown() error {
+	close(lb.shutdown)
+
 	if lb.listener != nil {
 		if err := lb.listener.Close(); err != nil {
 			return fmt.Errorf("failed to close listener: %w", err)
@@ -107,7 +124,8 @@ func (lb *LB) HandleConnection(conn net.Conn) {
 
 	nextServer, err := lb.getNextHealthyServer()
 	if err != nil {
-		log.Fatal("there is no healthy server")
+		log.Printf("there is no healthy server")
+		return
 	}
 
 	backendConn, err := net.Dial("tcp", nextServer.addr)
@@ -118,21 +136,28 @@ func (lb *LB) HandleConnection(conn net.Conn) {
 	defer backendConn.Close()
 
 	go io.Copy(backendConn, conn)
-	io.Copy(conn, backendConn)
+	go io.Copy(conn, backendConn)
+
+	select {
+	case <-lb.shutdown:
+		return
+	}
 }
 
 func (lb *LB) getNextHealthyServer() (*server, error) {
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-
-	idx := (lb.currentIdx + 1) % len(lb.servers)
-
 	for i := 0; i < len(lb.servers); i++ {
-		idx := (idx + i) % len(lb.servers)
-		if lb.servers[idx].healthy {
-			lb.currentIdx = idx
-			return &lb.servers[idx], nil
+		current := lb.currentIdx.Load()
+		next := (current + 1) % int32(len(lb.servers))
+
+		if !lb.currentIdx.CompareAndSwap(current, next) {
+			i--
+			continue
 		}
+
+		if lb.servers[next].status.Load() {
+			return lb.servers[next], nil
+		}
+
 	}
 
 	return nil, errors.New("no healthy server")
@@ -140,11 +165,18 @@ func (lb *LB) getNextHealthyServer() (*server, error) {
 
 func (lb *LB) runHealthChecks(ctx context.Context, ticker *time.Ticker) {
 	defer ticker.Stop()
+
+	pool := make(chan struct{}, runtime.GOMAXPROCS(0))
+
 	for {
 		select {
 		case <-ticker.C:
 			for idx := range lb.servers {
-				go lb.sendHealthCheck(ctx, idx)
+				pool <- struct{}{}
+				go func(idx int) {
+					lb.sendHealthCheck(ctx, idx)
+					<-pool
+				}(idx)
 			}
 		case <-ctx.Done():
 			log.Println("Health checks stopped.")
@@ -162,13 +194,18 @@ func (lb *LB) sendHealthCheck(ctx context.Context, idx int) {
 
 	res, err := (&http.Client{}).Do(req)
 
-	lb.mu.Lock()
-	defer lb.mu.Unlock()
-	if err != nil || res.StatusCode != http.StatusOK {
+	if err != nil {
 		log.Printf("%s is NOT healthy.", lb.servers[idx].addr)
-		lb.servers[idx].healthy = false
+		lb.servers[idx].status.Store(false)
+		return
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		log.Printf("%s is NOT healthy.", lb.servers[idx].addr)
+		lb.servers[idx].status.Store(false)
 	} else {
-		lb.servers[idx].healthy = true
+		lb.servers[idx].status.Store(true)
 	}
 	return
 }
