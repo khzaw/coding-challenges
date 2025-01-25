@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -28,15 +29,21 @@ func (c *Config) count(buf *bufio.Scanner) int {
 	return count
 }
 
-func (c *Config) ScanToken(filename string, splitFn bufio.SplitFunc) int {
-	f, err := os.Open(filename)
-	if err != nil {
-		fmt.Println("error opening file: ", err)
-		os.Exit(1)
+func (c *Config) ScanToken(splitFn bufio.SplitFunc) int {
+	var r io.Reader
+	if filename := flag.Arg(0); filename != "" {
+		f, err := os.Open(filename)
+		if err != nil {
+			fmt.Println("error opening file: ", err)
+			os.Exit(1)
+		}
+		r = f
+		defer f.Close()
+	} else {
+		r = os.Stdin
 	}
-	defer f.Close()
 
-	buf := bufio.NewScanner(f)
+	buf := bufio.NewScanner(r)
 	buf.Split(splitFn)
 	return c.count(buf)
 }
@@ -66,23 +73,21 @@ func main() {
 
 	var outputStr string
 
-	if filename := flag.Arg(0); filename != "" {
-		if cfg.flagLines {
-			outputStr += fmt.Sprintf("     %d", cfg.ScanToken(filename, bufio.ScanLines))
-		}
-
-		if cfg.flagWords {
-			outputStr += fmt.Sprintf("     %d", cfg.ScanToken(filename, bufio.ScanWords))
-		}
-
-		if cfg.flagSize {
-			outputStr += fmt.Sprintf("     %d", cfg.ScanToken(filename, bufio.ScanRunes))
-		}
-
-		if cfg.flagChars {
-			outputStr += fmt.Sprintf("     %d", cfg.ScanToken(filename, bufio.ScanBytes))
-		}
-
-		fmt.Println(outputStr, filename)
+	if cfg.flagLines {
+		outputStr += fmt.Sprintf("     %d", cfg.ScanToken(bufio.ScanLines))
 	}
+
+	if cfg.flagWords {
+		outputStr += fmt.Sprintf("     %d", cfg.ScanToken(bufio.ScanWords))
+	}
+
+	if cfg.flagSize {
+		outputStr += fmt.Sprintf("     %d", cfg.ScanToken(bufio.ScanRunes))
+	}
+
+	if cfg.flagChars {
+		outputStr += fmt.Sprintf("     %d", cfg.ScanToken(bufio.ScanBytes))
+	}
+
+	fmt.Println(outputStr)
 }
